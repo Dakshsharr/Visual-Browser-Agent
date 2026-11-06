@@ -26,7 +26,7 @@ document.getElementById("scan").addEventListener(
                 allResults.push(...response.results);
             }
 
-            console.log("RES: ", allResults);
+            console.log("Detected categories:", allResults.map(item => item.category));
 
             resultdiv.replaceChildren();
 
