@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Privacy Agent",
+  "version": "1.0.0",
+  "description": "Detects sensitive webpage elements locally.",
+  "permissions": ["activeTab", "webNavigation"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

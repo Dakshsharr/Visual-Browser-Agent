@@ -1,0 +1,43 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Browser Privacy Agent</title>
+    <style>
+        body {
+            width: 300px;
+            padding: 15px;
+            font-family: Arial, sans-serif;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        #results {
+            margin-top: 15px;
+        }
+
+        .item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #eee;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Privacy Agent</h2>
+
+    <button id="scan">Scan Current Page</button>
+
+    <div id="results">
+        Waiting for scan...
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
