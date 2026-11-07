@@ -1,5 +1,6 @@
 const originalTextMap = new Map();
 const originalInputMap = new Map();
+const originalContextMap = new Map();
 const inputDetectionRules = globalThis.INPUT_DETECTION_RULES;
 const textDetectionRules = globalThis.TEXT_DETECTION_RULES;
 
@@ -69,6 +70,50 @@ function scanPage() {
             });
         });
     });
+    const contextResults = detectContextualData();
+    sensitiveElements.push(...contextResults);
+    return sensitiveElements;
+}
+
+function detectContextualData() {
+    const sensitiveElements = [];
+    const rows = document.querySelectorAll("tr");
+    rows.forEach((row) => {
+        const cells = row.querySelectorAll("td, th");
+        cells.forEach((cell, index) => {
+            const cellText = cell.textContent
+                .trim()
+                .toLowerCase()
+                .replace(/['’]/g, "")
+                .replace(/[:*]/g, "")
+                .replace(/\s+/g, "");
+            
+            globalThis.CONTEXT_DETECTION_RULES.forEach((rule) => {
+                const labelMatches = rule.keywords.some((keyword) => {
+                    const normalizedKeyword = keyword  
+                        .toLowerCase()
+                        .replace(/['’]/g, "")
+                        .replace(/[:*]/g, "")
+                        .replace(/\s+/g, "")
+                        .trim();
+                        
+                    return cellText === normalizedKeyword;
+                });
+
+                if (labelMatches) {
+                    const nextcell = cells[index+1];
+                    if (!nextcell) return;
+
+                    sensitiveElements.push({
+                        category: rule.category,
+                        element: nextcell,
+                        type: "context"
+                    });
+                }
+            });
+
+        });
+    });
 
     return sensitiveElements;
 }
@@ -79,22 +124,30 @@ function redactSensitiveInfo(results) {
 
     results.forEach((item) => {
 
-        const input = item.element;
+        const element = item.element;
 
-        // Handle form elements
+       
         if (
-            input &&
-            ["INPUT", "TEXTAREA", "SELECT"].includes(input.tagName)
+            element &&
+            ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)
         ) {
-            if (!originalInputMap.has(input)) {
-                originalInputMap.set(input, input.value);
+            if (!originalInputMap.has(element)) {
+                originalInputMap.set(element, element.value);
             }
 
-            input.value = "[REDACTED]";
+            element.value = "[REDACTED]";
             return;
         }
 
-        // Group text matches by their text node
+        if (item.type === "context") {
+            if (!element || !element.isConnected) return;
+            if (!originalContextMap.has(element)) {
+                originalContextMap.set(element, element.innerHTML);
+            }
+            element.textContent = "[REDACTED]";
+            return;
+        }
+        
         const node = item.textNode;
 
         if (!node || !node.textContent) return;
@@ -107,7 +160,7 @@ function redactSensitiveInfo(results) {
 
     });
 
-    // Redact all matches in each text node together
+    
     textMatches.forEach((matches, node) => {
 
         if (!originalTextMap.has(node)) {
@@ -147,6 +200,13 @@ function restoreOriginalText() {
         }
     });
     originalTextMap.clear();
+
+    originalContextMap.forEach((originalHTML, element) => {
+        if (element && element.isConnected) {
+            element.innerHTML = originalHTML;
+        }
+    });
+    originalContextMap.clear();
 
     originalInputMap.forEach((originalValue, input) => {
         if (input && input.isConnected) {
