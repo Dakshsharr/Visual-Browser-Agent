@@ -1,9 +1,9 @@
-
+const originalTextMap = new Map();
+const originalInputMap = new Map();
 function scanPage() {
     const sensitiveElements = [];
-    const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-    const phonePattern = /\b(?:\+91[-\s]?)?[6-9]\d{9}\b/i;
-    
+    const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+    const phonePattern = /\b(?:\+91[-\s]?)?[6-9]\d{9}\b/gi;
     const walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT
@@ -12,29 +12,37 @@ function scanPage() {
     let node;
 
     while ((node = walker.nextNode())) {
-        const text = node.textContent.trim();
-
-        if (emailPattern.test(text)) {
-            const element = node.parentElement;
-
+        const text = (
+            originalTextMap.has(node)
+                ? originalTextMap.get(node)
+                : node.textContent
+        ).trim();
+        
+        const element = node.parentElement;
+        const emailMatches = [...text.matchAll(emailPattern)];
+        emailMatches.forEach((match) => {
             sensitiveElements.push({
                 category: "Email Address",
                 tag: element?.tagName,
                 type: "text",
-                element: element
+                element: element,
+                textNode: node,
+                matchedText: match[0]
             });
-        }
+        });
 
-        if (phonePattern.test(text)){
-            const element = node.parentElement;
+        const phoneMatches = [...text.matchAll(phonePattern)];
 
+        phoneMatches.forEach((match) => {
             sensitiveElements.push({
                 category: "Phone Number",
                 tag: element?.tagName,
                 type: "text",
-                element: element
+                element: element,
+                textNode: node,
+                matchedText: match[0]
             });
-        }
+        });
     }
 
     const inputs = document.querySelectorAll("input");
@@ -66,7 +74,7 @@ function scanPage() {
 
         else if (
             type === "tel" ||
-            /phone|mobile|telephone/.test(metadata)
+            /phone|mobile|telephone|cell|cellno|tel|tellno/.test(metadata)
         ) {
             category = "Phone Number";
         }
@@ -80,6 +88,7 @@ function scanPage() {
                 category,
                 tag: input.tagName,
                 type,
+                element: input,
                 field: input.name || input.id || "Unnamed field"
             });
         }
@@ -88,14 +97,66 @@ function scanPage() {
     return sensitiveElements;
 }
 
+function redactSensitiveInfo(results) {
+    results.forEach((item) => {
+        const input = item.element;
+        if (input && input.tagName === "INPUT") {
+            if (!originalInputMap.has(input)){
+                originalInputMap.set(input, input.value);
+            }
+            input.value = "[REDACTED]";
+            return;
+        }
+        const node = item.textNode;
+
+        if (!node || !node.textContent) return;
+
+        if (!originalTextMap.has(node)) {
+            originalTextMap.set(node, node.textContent);
+        }
+
+        node.textContent = node.textContent.replace(
+            item.matchedText,
+            "[REDACTED]"
+        );
+    });
+}
+
+function restoreOriginalText() {
+    originalTextMap.forEach((originalText, node) => {
+        if (node && node.isConnected){
+            node.textContent = originalText;
+        }
+    });
+    originalTextMap.clear();
+
+    originalInputMap.forEach((originalValue, input) => {
+        if (input && input.isConnected) {
+            input.value = originalValue;
+        }
+    });
+    originalInputMap.clear();
+}
+
 chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
         if (message.action === "SCAN_PAGE") {
             const results = scanPage();
+            redactSensitiveInfo(results);
+            const safeResults = results.map((item)=>({
+                category: item.category,
+                tag: item.tag,
+                type: item.type
+            }));
             sendResponse({
-                total: results.length,
-                results
+                total: safeResults.length,
+                results: safeResults
             });
+        }
+
+        if (message.action === "RESTORE_PAGE") {
+            restoreOriginalText();
+            sendResponse({ success: true });
         }
     }
 );

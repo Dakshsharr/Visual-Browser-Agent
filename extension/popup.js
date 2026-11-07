@@ -51,3 +51,21 @@ document.getElementById("scan").addEventListener(
         }
     }
 );
+
+document.getElementById("restore").addEventListener(
+    "click",
+    async () => {
+        const [tab] = await chrome.tabs.query({
+            active: true,
+            currentWindow: true
+        });
+
+        await chrome.tabs.sendMessage(
+            tab.id,
+            {action: "RESTORE_PAGE"}
+        );
+
+        document.getElementById("results").textContent =
+            "Original Page text restored";
+    }
+);
