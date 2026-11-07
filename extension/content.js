@@ -1,9 +1,10 @@
 const originalTextMap = new Map();
 const originalInputMap = new Map();
+const inputDetectionRules = globalThis.INPUT_DETECTION_RULES;
+const textDetectionRules = globalThis.TEXT_DETECTION_RULES;
+
 function scanPage() {
     const sensitiveElements = [];
-    const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-    const phonePattern = /\b(?:\+91[-\s]?)?[6-9]\d{9}\b/gi;
     const walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT
@@ -19,36 +20,28 @@ function scanPage() {
         ).trim();
         
         const element = node.parentElement;
-        const emailMatches = [...text.matchAll(emailPattern)];
-        emailMatches.forEach((match) => {
-            sensitiveElements.push({
-                category: "Email Address",
-                tag: element?.tagName,
-                type: "text",
-                element: element,
-                textNode: node,
-                matchedText: match[0]
-            });
-        });
-
-        const phoneMatches = [...text.matchAll(phonePattern)];
-
-        phoneMatches.forEach((match) => {
-            sensitiveElements.push({
-                category: "Phone Number",
-                tag: element?.tagName,
-                type: "text",
-                element: element,
-                textNode: node,
-                matchedText: match[0]
-            });
+        textDetectionRules.forEach((rule) => {
+            const matches = text.matchAll(rule.pattern);
+            for (const match of matches) {
+                sensitiveElements.push({
+                    category: rule.category,
+                    tag: element?.tagName,
+                    type: "text",
+                    element: element,
+                    textNode: node,
+                    matchedText: match[0]
+                });
+            }
         });
     }
 
-    const inputs = document.querySelectorAll("input");
+    const inputs = document.querySelectorAll("input, textarea, select");
 
     inputs.forEach((input) => {
-        const type = (input.type || "").toLowerCase();
+        const tag = input.tagName?.toLowerCase() || "unknown";
+        const type = (
+            input.getAttribute("type") || tag
+        ).toLowerCase();
 
         const metadata = [
             input.name,
@@ -58,68 +51,93 @@ function scanPage() {
             input.getAttribute("autocomplete")
         ].join(" ").toLowerCase();
 
-        let category = null;
+        const matchedRules = inputDetectionRules.filter((rule) => {
+            const typeMatches = rule.types.includes(type);
+            const metadatMatches = rule.keywords.some((keyword) => {
+                return metadata.includes(keyword)
+            });
+            return typeMatches || metadatMatches;
+        })
 
-        if (type === "password") {
-            category = "Password";
-        }
-
-        else if (
-            type === "email" ||
-            /email|e-mail/.test(metadata) ||
-            input.getAttribute("autocomplete") === "username"
-        ) {
-            category = "Email / Username";
-        }
-
-        else if (
-            type === "tel" ||
-            /phone|mobile|telephone|cell|cellno|tel|tellno/.test(metadata)
-        ) {
-            category = "Phone Number";
-        }
-
-        else if (/cc-/.test(metadata)) {
-            category = "Payment Information";
-        }
-
-        if (category) {
+        matchedRules.forEach((rule) => {
             sensitiveElements.push({
-                category,
+                category: rule.category,
                 tag: input.tagName,
-                type,
+                type: type,
                 element: input,
                 field: input.name || input.id || "Unnamed field"
             });
-        }
+        });
     });
 
     return sensitiveElements;
 }
 
 function redactSensitiveInfo(results) {
+
+    const textMatches = new Map();
+
     results.forEach((item) => {
+
         const input = item.element;
-        if (input && input.tagName === "INPUT") {
-            if (!originalInputMap.has(input)){
+
+        // Handle form elements
+        if (
+            input &&
+            ["INPUT", "TEXTAREA", "SELECT"].includes(input.tagName)
+        ) {
+            if (!originalInputMap.has(input)) {
                 originalInputMap.set(input, input.value);
             }
+
             input.value = "[REDACTED]";
             return;
         }
+
+        // Group text matches by their text node
         const node = item.textNode;
 
         if (!node || !node.textContent) return;
+
+        if (!textMatches.has(node)) {
+            textMatches.set(node, []);
+        }
+
+        textMatches.get(node).push(item.matchedText);
+
+    });
+
+    // Redact all matches in each text node together
+    textMatches.forEach((matches, node) => {
 
         if (!originalTextMap.has(node)) {
             originalTextMap.set(node, node.textContent);
         }
 
-        node.textContent = node.textContent.replace(
-            item.matchedText,
+        const originalText = originalTextMap.get(node);
+
+        const uniqueMatches = [...new Set(matches)]
+            .filter(Boolean)
+            .sort((a, b) => b.length - a.length);
+
+        if (uniqueMatches.length === 0) return;
+
+        const escapedMatches = uniqueMatches.map((value) => {
+            return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        });
+
+        const pattern = new RegExp(
+            escapedMatches.join("|"),
+            "g"
+        );
+
+        node.textContent = originalText.replace(
+            pattern,
             "[REDACTED]"
         );
+
     });
+
 }
 
 function restoreOriginalText() {
