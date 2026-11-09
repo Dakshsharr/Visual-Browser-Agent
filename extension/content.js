@@ -76,43 +76,82 @@ function scanPage() {
 }
 
 function detectContextualData() {
+
     const sensitiveElements = [];
-    const rows = document.querySelectorAll("tr");
-    rows.forEach((row) => {
-        const cells = row.querySelectorAll("td, th");
-        cells.forEach((cell, index) => {
-            const cellText = cell.textContent
+
+    globalThis.CONTEXT_DETECTION_RULES.forEach((rule) => {
+
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_ELEMENT
+        );
+
+        let element;
+
+        while ((element = walker.nextNode())) {
+            if (element.children.length > 0){
+                continue;
+            }
+
+            const elementText = element.textContent
                 .trim()
                 .toLowerCase()
                 .replace(/['’]/g, "")
                 .replace(/[:*]/g, "")
-                .replace(/\s+/g, "");
-            
-            globalThis.CONTEXT_DETECTION_RULES.forEach((rule) => {
-                const labelMatches = rule.keywords.some((keyword) => {
-                    const normalizedKeyword = keyword  
-                        .toLowerCase()
-                        .replace(/['’]/g, "")
-                        .replace(/[:*]/g, "")
-                        .replace(/\s+/g, "")
-                        .trim();
-                        
-                    return cellText === normalizedKeyword;
-                });
+                .replace(/\s+/g, " ");
 
-                if (labelMatches) {
-                    const nextcell = cells[index+1];
-                    if (!nextcell) return;
+            const labelMatches = rule.keywords.some((keyword) => {
 
-                    sensitiveElements.push({
-                        category: rule.category,
-                        element: nextcell,
-                        type: "context"
-                    });
-                }
+                const normalizedKeyword = keyword
+                    .toLowerCase()
+                    .replace(/['’]/g, "")
+                    .replace(/[:*]/g, "")
+                    .replace(/\s+/g, " ")
+                    .trim();
+
+                return elementText === normalizedKeyword;
             });
 
-        });
+            if (!labelMatches) continue;
+
+            let valueElement = null;
+
+            if (rule.relationship === "next-cell") {
+
+                const cell = element.closest("td, th");
+
+                if (cell) {
+                    valueElement = cell.nextElementSibling;
+                }
+            }
+            else if (rule.relationship === "next-element") {
+
+                valueElement = element.nextElementSibling;
+            }
+            else if (rule.relationship === "next-cell-or-container") {
+                const cell = element.closest("td, th");
+
+                if (cell) {
+                    valueElement = cell.nextElementSibling;
+                }
+                else {
+                    const parent = element.parentElement;
+
+                    if (parent) {
+                        valueElement = parent.nextElementSibling;
+                    }
+                }
+            }
+
+            if (!valueElement) continue;
+
+            sensitiveElements.push({
+                category: rule.category,
+                element: valueElement,
+                type: "context"
+            });
+
+        }
     });
 
     return sensitiveElements;

@@ -11,7 +11,7 @@ globalThis.CONTEXT_DETECTION_RULES = [
             "mother's name",
             "guardian name"
         ],
-        relationship: "next-cell"
+        relationship: "next-cell-or-container"
     },
     {
         category: "Date of Birth",
@@ -22,7 +22,7 @@ globalThis.CONTEXT_DETECTION_RULES = [
             "birthdate",
             "date of birth no."
         ],
-        relationship: "next-cell"
+        relationship: "next-element"
     },
     {
         category: "Address",
@@ -33,6 +33,21 @@ globalThis.CONTEXT_DETECTION_RULES = [
             "correspondence address",
             "residential address",
             "city"
+        ],
+        relationship: "next-cell-or-container"
+    },
+    {
+        category: "Address Component",
+        keywords: [
+            "house number",
+            "house no.",
+            "street",
+            "locality",
+            "district",
+            "state",
+            "postal code",
+            "pin code",
+            "pincode"
         ],
         relationship: "next-cell"
     }
