@@ -255,25 +255,51 @@ function restoreOriginalText() {
     originalInputMap.clear();
 }
 
+
 chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
+        console.log("CONTENT SCRIPT RECEIVED:", message.action);
+        console.log("FRAME URL:", window.location.href);
+
         if (message.action === "SCAN_PAGE") {
             const results = scanPage();
+
+            // Capture element positions before redaction
+            const safeResults = results.map(item => {
+                const rect = item.element?.getBoundingClientRect();
+
+                return {
+                    category: item.category,
+                    tag: item.tag,
+                    type: item.type,
+                    bounds: rect ? {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.width,
+                        height: rect.height
+                    } : null
+                };
+            });
+
+            // Redact the actual webpage
             redactSensitiveInfo(results);
-            const safeResults = results.map((item)=>({
-                category: item.category,
-                tag: item.tag,
-                type: item.type
-            }));
+
             sendResponse({
                 total: safeResults.length,
-                results: safeResults
+                results: safeResults,
+                viewport: {
+                    width: window.innerWidth,
+                    height: window.innerHeight
+                }
             });
+
+            return true;
         }
 
         if (message.action === "RESTORE_PAGE") {
             restoreOriginalText();
             sendResponse({ success: true });
+            return true;
         }
     }
 );

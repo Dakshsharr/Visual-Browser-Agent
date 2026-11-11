@@ -5,6 +5,7 @@ import {
     groupOCRWords
 } from "./ocr.bundle.js";
 
+
 document.getElementById("scan").addEventListener(
     "click",
     async () => {
@@ -62,7 +63,7 @@ document.getElementById("scan").addEventListener(
                 }))
             );
 
-            // 4. Detect sensitive information
+            // 4. Detect sensitive information using OCR
             const contextualDetections =
                 detectContextualOCRValues(ocrLines);
 
@@ -71,7 +72,7 @@ document.getElementById("scan").addEventListener(
                 contextualDetections
             );
 
-            // 5. Collect unique redaction boxes
+            // 5. Collect OCR redaction boxes
             const contextualBoxes = Array.from(
                 new Map(
                     contextualDetections
@@ -83,15 +84,7 @@ document.getElementById("scan").addEventListener(
                 ).values()
             );
 
-            console.log("SENSITIVE BOXES:", contextualBoxes);
-
-            // 6. Redact screenshot
-            const redactedScreenshot = await redactScreenshot(
-                screenshot,
-                contextualBoxes
-            );
-
-            // 7. Scan DOM across all frames
+            // 6. Scan DOM across all frames
             const frames = await chrome.webNavigation.getAllFrames({
                 tabId: tab.id
             });
@@ -107,7 +100,13 @@ document.getElementById("scan").addEventListener(
                     );
 
                     if (response?.results) {
-                        allResults.push(...response.results);
+                        allResults.push(
+                            ...response.results.map(item => ({
+                                ...item,
+                                frameId: frame.frameId,
+                                viewport: response.viewport
+                            }))
+                        );
                     }
                 } catch (error) {
                     console.warn(
@@ -118,7 +117,70 @@ document.getElementById("scan").addEventListener(
                 }
             }
 
-            // 8. Display results
+            // 7. Collect password field positions
+            const passwordBoxes = [];
+
+            const topFrame = allResults.find(
+                item =>
+                    item.frameId === 0 &&
+                    item.tag === "INPUT" &&
+                    item.type === "password" &&
+                    item.bounds &&
+                    item.viewport
+            );
+
+            if (topFrame) {
+                const viewport = topFrame.viewport;
+
+                const scaleX =
+                    screenshotImage.naturalWidth / viewport.width;
+
+                const scaleY =
+                    screenshotImage.naturalHeight / viewport.height;
+
+                allResults
+                    .filter(item =>
+                        item.frameId === 0 &&
+                        item.tag === "INPUT" &&
+                        item.type === "password" &&
+                        item.bounds
+                    )
+                    .forEach(item => {
+                        passwordBoxes.push({
+                            x: item.bounds.x * scaleX,
+                            y: item.bounds.y * scaleY,
+                            width: item.bounds.width * scaleX,
+                            height: item.bounds.height * scaleY
+                        });
+                    });
+            }
+
+            console.log("PASSWORD FIELD BOXES:", passwordBoxes);
+
+            // 8. Combine OCR and DOM redaction boxes
+            const allBoxes = [
+                ...contextualBoxes,
+                ...passwordBoxes
+            ];
+
+            const uniqueBoxes = Array.from(
+                new Map(
+                    allBoxes.map(box => [
+                        `${box.x}-${box.y}-${box.width}-${box.height}`,
+                        box
+                    ])
+                ).values()
+            );
+
+            console.log("SENSITIVE BOXES:", uniqueBoxes);
+
+            // 9. Redact screenshot
+            const redactedScreenshot = await redactScreenshot(
+                screenshot,
+                uniqueBoxes
+            );
+
+            // 10. Display results
             resultdiv.replaceChildren();
 
             const heading = document.createElement("h3");
@@ -202,6 +264,7 @@ async function redactScreenshot(screenshot, boxes) {
 // OCR DETECTION
 // --------------------------------------------------
 
+
 function detectContextualOCRValues(ocrLines) {
     const detected = [];
     const consumed = new Set();
@@ -216,6 +279,11 @@ function detectContextualOCRValues(ocrLines) {
         { words: ["student", "name"], category: "student name" },
         { words: ["full", "name"], category: "full name" },
         { words: ["name"], category: "name" },
+
+        // Usernames
+        { words: ["user", "name"], category: "username" },
+        { words: ["username"], category: "username" },
+        { words: ["login", "id"], category: "username" },
 
         // Date of birth
         { words: ["date", "of", "birth"], category: "date of birth" },
@@ -239,7 +307,7 @@ function detectContextualOCRValues(ocrLines) {
         { words: ["pincode"], category: "pin code" },
         { words: ["postal", "code"], category: "pin code" },
 
-        // Other details
+        // Contact details
         { words: ["email"], category: "email" },
         { words: ["phone"], category: "phone" },
         { words: ["mobile"], category: "phone" },
@@ -251,12 +319,11 @@ function detectContextualOCRValues(ocrLines) {
 
     function addDetection(category, words) {
         const validWords = words.filter(Boolean);
-
         if (!validWords.length) return;
 
-        const key = validWords.map(word =>
-            `${word.x}-${word.y}-${word.width}-${word.height}`
-        ).join("|");
+        const key = validWords
+            .map(word => `${word.x}-${word.y}-${word.width}-${word.height}`)
+            .join("|");
 
         if (consumed.has(key)) return;
 
@@ -269,52 +336,113 @@ function detectContextualOCRValues(ocrLines) {
         });
     }
 
-    // 1. Contextual label detection
-    for (let lineIndex = 0; lineIndex < ocrLines.length; lineIndex++) {
+    // Find every occurrence of a label anywhere in a line.
+    for (let lineIndex = 0; lineIndex < ocrLines.length - 1; lineIndex++) {
         const line = ocrLines[lineIndex];
         const words = line.words;
-
         const normalized = words.map(word => normalize(word.text));
 
-        const matchingLabel = labels.find(label =>
-            label.words.every((part, index) =>
-                normalized[index] === part
-            )
-        );
+        const matches = [];
 
-        if (!matchingLabel) continue;
+        for (const label of labels) {
+            for (let i = 0; i <= normalized.length - label.words.length; i++) {
+                const matchesLabel = label.words.every(
+                    (part, offset) => normalized[i + offset] === part
+                );
 
-        let valueWords = words.slice(matchingLabel.words.length);
-
-        // If the value is on the next line, use that line.
-        if (valueWords.length === 0 && lineIndex + 1 < ocrLines.length) {
-            valueWords = ocrLines[lineIndex + 1].words;
-
-            // Avoid consuming another label as a value.
-            const nextText = valueWords.map(word => normalize(word.text));
-
-            const isAnotherLabel = labels.some(label =>
-                label.words.every((part, index) =>
-                    nextText[index] === part
-                )
-            );
-
-            if (isAnotherLabel) continue;
+                if (matchesLabel) {
+                    matches.push({
+                        start: i,
+                        end: i + label.words.length - 1,
+                        category: label.category,
+                        centerX: (
+                            words[i].x +
+                            words[i + label.words.length - 1].x +
+                            words[i + label.words.length - 1].width
+                        ) / 2
+                    });
+                }
+            }
         }
 
-        addDetection(matchingLabel.category, valueWords);
+        // Prefer longer labels over shorter overlapping labels.
+        matches.sort((a, b) =>
+            (b.end - b.start) - (a.end - a.start)
+        );
+
+        const accepted = [];
+        const usedIndexes = new Set();
+
+        for (const match of matches) {
+            let overlaps = false;
+
+            for (let i = match.start; i <= match.end; i++) {
+                if (usedIndexes.has(i)) {
+                    overlaps = true;
+                    break;
+                }
+            }
+
+            if (overlaps) continue;
+
+            accepted.push(match);
+
+            for (let i = match.start; i <= match.end; i++) {
+                usedIndexes.add(i);
+            }
+        }
+
+        if (!accepted.length) continue;
+
+        // The next OCR line contains the corresponding field values.
+        const nextLine = ocrLines[lineIndex + 1];
+
+        // Use the positions of labels to distinguish form columns.
+        const sortedMatches = [...accepted].sort(
+            (a, b) => a.centerX - b.centerX
+        );
+
+        for (const match of accepted) {
+            const position = sortedMatches.indexOf(match);
+
+            const leftBoundary = position === 0
+                ? -Infinity
+                : (
+                    sortedMatches[position - 1].centerX +
+                    match.centerX
+                ) / 2;
+
+            const rightBoundary = position === sortedMatches.length - 1
+                ? Infinity
+                : (
+                    match.centerX +
+                    sortedMatches[position + 1].centerX
+                ) / 2;
+
+            const valueWords = nextLine.words.filter(word => {
+                const wordCenter = word.x + word.width / 2;
+
+                return (
+                    wordCenter > leftBoundary &&
+                    wordCenter < rightBoundary
+                );
+            });
+
+            // Only redact actual OCR-recognised values.
+            if (valueWords.length) {
+                addDetection(match.category, valueWords);
+            }
+        }
     }
 
-    // 2. Email detection
+    // Email detection
     for (const line of ocrLines) {
-        const text = line.text;
-
         const emailRegex =
             /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
         let match;
 
-        while ((match = emailRegex.exec(text)) !== null) {
+        while ((match = emailRegex.exec(line.text)) !== null) {
             const matchedWords = findWordsInRange(
                 line,
                 match.index,
@@ -325,16 +453,13 @@ function detectContextualOCRValues(ocrLines) {
         }
     }
 
-    // 3. Indian phone detection
+    // Indian phone detection
     for (const line of ocrLines) {
-        const text = line.text;
-
-        const phoneRegex =
-            /(?:\+91[\s-]?)?[6-9]\d{9}/g;
+        const phoneRegex = /(?:\+91[\s-]?)?[6-9]\d{9}/g;
 
         let match;
 
-        while ((match = phoneRegex.exec(text)) !== null) {
+        while ((match = phoneRegex.exec(line.text)) !== null) {
             const matchedWords = findWordsInRange(
                 line,
                 match.index,
@@ -349,6 +474,7 @@ function detectContextualOCRValues(ocrLines) {
 
     return detected;
 }
+
 
 
 // --------------------------------------------------
